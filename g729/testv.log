@@ -1,0 +1,20 @@
+TESTING..............
+/usr/kroon/w/standards/itu/g729/src/fix33
+Fri Jul 19 18:25:11 EDT 1996
+encoder test
+MATCH Test file algthm.bs
+MATCH Test file fixed.bs
+MATCH Test file lsp.bs
+MATCH Test file pitch.bs
+MATCH Test file speech.bs
+MATCH Test file tame.bs
+decoder test
+MATCH Test file algthm.pf
+MATCH Test file erasure.pf
+MATCH Test file fixed.pf
+MATCH Test file lsp.pf
+MATCH Test file overflow.pf
+MATCH Test file parity.pf
+MATCH Test file pitch.pf
+MATCH Test file speech.pf
+MATCH Test file tame.pf

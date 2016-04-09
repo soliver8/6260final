@@ -1,0 +1,453 @@
+Following is a list of changes since version 2.0. All these changes were
+incorporated in version 3.3.
+
+The testresults reported in Geneva (Nov 1995) are based on hardware that
+implemented version 2.02 which includes bugfixes 1 and 2. 
+
+NOTE: This file will not be part of the final ITU distribution package,
+and has been included as a service to organizations that received version 
+2.0.
+
+----------------------------------------------------------------------------
+BUG01  Date: 7/6/95
+
+Problem:
+
+frame erasure introduces click if the first frame is an erasure
+
+Reason:
+
+the vector "prev_lsp[]" is not initialized properly 
+
+Modification:
+
+File: lspdec.c
+
+void Lsp_decw_reset(
+  void
+)
+{
+  Word16 i;
+
+  for(i=0; i<MA_NP; i++)
+    Copy( &freq_prev_reset[0], &freq_prev[i][0], N_PR );
+
+  prev_ma = 0;    move16();
+
+  Copy( freq_prev_reset, prev_lsp, N_PR);          <==== ADD THIS LINE
+  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+}
+
+Effect on test files:
+
+ None
+
+----------------------------------------------------------------------------
+BUG02  Date: 7/7/95
+
+Problem:
+
+frame erasure does not match behavior of floating point code
+
+Reason:
+
+The new gain predictor state is computed as the average - 4. The value
+4 should be in Q10 format
+
+Modification:
+
+File: gainpred.c
+line: 144
+Change:
+<    av_pred_en = sub( av_pred_en, 4 );                          /* Q10 */
+Into:
+>    av_pred_en = sub( av_pred_en, 4096 );                          /* Q10 */
+
+Effect on test files:
+
+The file speech.psx should be replaced by speech2.psx. This file can
+be found on ftp.research.att.com  in dist/itu8
+----------------------------------------------------------------------------
+BUG03	Date: Oct 24, 1995
+
+Problem:
+
+routine L_extract (file oper_32b.c) where the ANSI C 
+does not compute correctly.
+
+Reason:
+
+The bug occurs when *hi == -32768L;
+if this case the *lo value found is equal to the correct value minus 
+1
+
+For instance, L_32:  -2147482994  = -32678<<16 + 327<<1 
+(hi= -32768  and lo = 327)
+The old routine computes: hi_old = -32768  and lo_old= 326
+
+Modification:
+
+File: oper_32b.c
+
+        void L_Extract(Word32 L_32, Word16 *hi, Word16 *lo)
+        {
+          *hi  = extract_h(L_32);
+          *lo  = extract_l(L_msu( L_shr(L_32, 1), *hi, 16384));
+          return;
+        }
+
+
+----------------------------------------------------------------------------
+BUG04	Date: Oct 4, 1995
+
+Problem:
+
+ Values of rc are not defined if lpc filter is unstable
+
+Reason:
+ On line 254 (file lpc.c), there is a test for stability of the filter.  If
+the filter is unstable, we trash the computed A[] and we re-use the old values
+old_A[].  But we don't provide valid rc[] values before returning to the
+calling function, although rc[] is an output of the Levinson() function.  If
+the filter is unstable, the calling function will therefore use the same A[]
+values as in the previous frame, but will use garbage rc[] values.
+
+
+Modification:
+  File lpc.c
+
+ values of rc are saved (only first 2 coefficients) into old_rc. These values
+ will be used for rc, in case the filter is unstable.
+----------------------------------------------------------------------------
+BUG05	Date: Oct 27, 1995
+
+Problem:
+ incorrect overflow treatment in postfilter
+
+Reason:
+At line 905 of pst.c you will find:
+
+    L_temp =L_sub(L_g0 ,32768L);
+    if(L_temp > 0L) {
+        g0 = 32767; move16();
+    }
+    else {
+        g0 = extract_l(L_g0);
+    }
+
+This means that
+
+	...
+	L_g0 = 32766	-> g0 = 32766
+	L_g0 = 32767	-> g0 = 32767
+	L_g0 = 32768	-> g0 = 32768!
+	L_g0 = 32769	-> g0 = 32767
+	L_g0 = 32770	-> g0 = 32767
+	...
+
+Modification:
+
+File pst.c
+
+Replace:
+    L_g0 = L_shr(L_g0, 2);
+    /* g0 : in Q10  (bounded to 2**5) */
+    test();
+    L_temp =L_sub(L_g0 ,32768L);
+    if(L_temp > 0L) {
+        g0 = 32767; move16();
+    }
+    else {
+        g0 = extract_l(L_g0);
+    }
+
+By:
+
+    g0 = extract_h (L_shl (L_g0, 14));
+
+
+----------------------------------------------------------------------------
+BUG06	Date: Oct 30, 1995
+
+Problem:
+
+Accuracy of LPC analysis is off by a factor of 2
+
+Reason:
+
+I think there is a problem in the C description of G.729 in file lpc.c, line
+276.  According to the comments, we want to retrieve A[j], which is in DPF
+format.  Mathematically, we should retrieve the DPF number this way:
+        A[j] = Ah[j] <<16 + Al[j]<<1
+but instead the code does the equivalent of (line 276, 277):
+        A[j] = (Ah[j]*32767)<<1 + Al[j]<<1
+The resulting 32 bit difference between the 2 methods is =2*Ah[j].  This
+imprecision on A[] values will accumulate every loop we do.  The algorithm
+therefore provides much less than 32 bit precision. 
+
+Modification:
+    file lpc.c  
+
+Old code:
+
+================================(1)=================================
+    /*------------------------------------------*
+     *  Compute new LPC coeff. -> An[i]         *
+     *  An[j]= A[j] + K*A[i-j]     , j=1 to i-1 *
+     *  An[i]= K                                *
+     *------------------------------------------*/
+
+
+    for(j=1; j<i; j++)
+    {
+      t0 = Mpy_32(Kh, Kl, Ah[i-j], Al[i-j]);
+      t0 = L_mac(t0, Ah[j], 32767);
+      t0 = L_mac(t0, Al[j], 1);
+      L_Extract(t0, &Anh[j], &Anl[j]);
+    }
+
+
+New code
+    for(j=1; j<i; j++)
+    {
+      t0 = Mpy_32(Kh, Kl, Ah[i-j], Al[i-j]);
+      t0 = L_add(t0, L_Comp(Ah[j], Al[j]));
+      L_Extract(t0, &Anh[j], &Anl[j]);
+    }
+
+----------------------------------------------------------------------------
+BUG07	Date: Nov 10, 1995
+
+Problem:
+
+Coder output is not zero for zero input.
+
+Description
+
+The problem takes its origin
+in a peculiarity of the function that normalize a number (norm_l() ). When
+we call this function with "0" the return exponent is "0" (a 1 returns an
+exponent of 30). In the gain quantization function, the correlations (vector
+g_coeff[]) are all scaled to the same exponent. Because the exponent of "0"
+is 0 the precision is lost and the ouput gain is not very good.
+
+Modification
+ We have corrected the problem by forcing the exponent of xy to 30 when xy =
+0. With this correction the output of the coder "shuts off" for all zeros
+input. Here are the old version and the corrected version:
+
+File:  pitch.c
+
+-----------------Old code-------------------------------
+
+   /* Compute scalar product <xn[],y1[]> */
+
+   Overflow = 0;         move16();
+   s = 1;        move32();            /* Avoid case of all zeros */
+   for(i=0; i<L_subfr; i++)
+     s = L_mac(s, xn[i], y1[i]);
+
+   test();
+   if (Overflow == 0) {
+     exp_xy = norm_l(s);
+     xy     = round( L_shl(s, exp_xy) );
+   }
+   else {
+     s = 1;        move32();            /* Avoid case of all zeros */
+     for(i=0; i<L_subfr; i++)
+       s = L_mac(s, xn[i], scaled_y1[i]);
+     exp_xy = norm_l(s);
+     xy     = round( L_shl(s, exp_xy) );
+     exp_xy = sub(exp_xy, 2);
+   }
+
+   g_coeff[0] = yy;                move16();
+   g_coeff[1] = sub(15, exp_yy);   move16();
+   g_coeff[2] = xy;                move16();
+   g_coeff[3] = sub(15, exp_xy);   move16();
+
+   /* If (xy < 4) gain = 0 */
+
+   i = sub(xy,4);
+   test();      move16();
+   if (i <  0)  return( (Word16) 0);
+
+
+----------------New code---------------------------------
+
+   /* Compute scalar product <xn[],y1[]> */
+
+   Overflow = 0;         move16();
+-> s = 0;                move32();
+   for(i=0; i<L_subfr; i++)
+     s = L_mac(s, xn[i], y1[i]);
+
+   test();
+   if (Overflow == 0) {
+     exp_xy = norm_l(s);
+     xy     = round( L_shl(s, exp_xy) );
+   }
+   else {
+->   s = 0;        move32();
+     for(i=0; i<L_subfr; i++)
+       s = L_mac(s, xn[i], scaled_y1[i]);
+     exp_xy = norm_l(s);
+     xy     = round( L_shl(s, exp_xy) );
+     exp_xy = sub(exp_xy, 2);
+   }
+
+   g_coeff[0] = yy;                move16();
+   g_coeff[1] = sub(15, exp_yy);   move16();
+   g_coeff[2] = xy;                move16();
+   g_coeff[3] = sub(15, exp_xy);   move16();
+
+-> /* If (xy <= 0) gain = 0 */
+
+-> test();      move16();
+-> if (xy <= 0)
+-> {
+->    g_coeff[3] = -15;         /* Force exp_xy to -15 = (15-30) */
+->    return( (Word16) 0);
+-> }
+
+
+----------------------------------------------------------------------------
+BUG08	Date: Nov 3, 1995
+
+Problem:
+    Incorrect calculation of postfilter pitch gain
+
+Description
+
+    The effect of the bug was generally to boost the postfilter pitch
+    gain to its higher value (1) in voiced frames, with fractional
+    delays, where the long interpolation filter had been selected,
+    and only in the case where sh_den > sh_num.
+
+Modification:
+   file pst.c
+
+    the lines 283-287 :
+--------------------------------------------------------------------------
+        test();
+        if(sub(sh_num,sh_den) > 0) { /* sh_den < sh_num impossible */
+            temp     = sub(sh_num, sh_den);
+            den_gltp = shr(den_gltp, temp);
+        }
+--------------------------------------------------------------------------
+    should be replaced by :
+--------------------------------------------------------------------------
+        temp = sub(sh_num,sh_den);
+        test();
+        if(temp >= 0) den_gltp = shr(den_gltp, temp);
+        else {
+            num_gltp = shl(num_gltp, temp); /*  >> (-temp) */
+        }
+
+--------------------------------------------------------------------------
+BUG09	Date: Nov 11, 1995
+
+
+Problem:
+    worst worst case gets computed incorrectly
+
+Description
+
+ Because the
+complexity of the fixed codebook search is divided between the two subframes
+(variable extra) we can not add the worst case of each call to the fixed
+codebook function to have the worst case on a frame basis.
+
+Modification
+
+File coder.c
+  We should remove the 3 calls to the function fwc() in the subframe loop to
+have a more meaningfull result for the WorstWC number.
+line 421
+    fwc();  /* Pitch close-loop functions worst case */
+line 431
+    fwc();  /* Innovative codebook functions worst case */
+line 450
+    fwc();  /* Gain quantization functions worst case */
+
+In addition the printing of the WMOPS numbers has been made conditional.
+The default is not to print this information.
+
+--------------------------------------------------------------------------
+BUG10	Date: Dec 1, 1995
+
+Problem:
+    Overflow during synthesis can generate unpredicted behavior
+
+Description:
+
+ As a result of channel errors combined with extreme inputsignals (such
+ as high level sinewaves), the decoder could reach an overflow condition.
+
+Modification:
+
+ The decoder check for overflow in the synthesizer. If overflow is detected
+ the excitation is scaled down by a factor of 4 and the speech is resynthesized. Note: that under normal conditions (even high input levels), this part is
+ never used.
+
+--------------------------------------------------------------------------
+BUG11	Date: Dec 1, 1995
+
+
+Problem:
+    For some highly periodic signals and channel errors, the divergence
+ between encoder and decoder could results to an unstable system resulting
+ in overflow.
+
+Description
+
+ This problem, which was noticable for a 10 seconds 3000 Hz sinewave with
+ amplitude of 16384, and a frame erasure early in the file, is a fundamental
+ CELP problem. The prolonged instability of the pitch predictor (gain > 1)
+ will lead to a systematic error between input and ouput under the presence
+ of channel errors.
+
+Modification:
+
+ The encoder computes the expected damage as a result of an (hypothetical)
+ mismatch between encoder and decoder. If this damage exceeds a threshold,
+ the encoder is tamed by forcing the adaptive codebook contribution to have
+ a gain which is on the average < 1. Hence channel errors will have less of
+ an impact on strongly periodic signals.
+
+ It should be noted that this modification prevents the overflow condition
+ and the overflow fix is not needed. However, the combination of these 2 fixes
+ will make the coder very robust for a large variety of input signals.
+--------------------------------------------------------------------------
+
+Besides the bug fixes the following changes were made:
+
+1)
+Version 3.3 does not synchronize the input and output signals. The output
+is delayed by 40 samples, which is equivalent to the look-ahead. This was
+done to match the behaviour of hardware. To force synchronization define
+the SYNC flag
+
+2)
+The hardware used for testing assumed 13 bit resolution for input and output.
+To match this behavior, define the flag HARDW in coder.c and decoder.c.
+
+3)
+It was found that the lsp quantization could be simplified without compromising
+performance. 
+In the LSP quantization in version 2.0, the stability is checked within the
+quantization procedure. That is, for every codevector in the second stage,
+the LSFs are reordered before computing the weighted distance. In this version,
+we removed this procedure. Note that removing the ordering simplifies
+the distance
+computation since we can subtract the first stage contribution from the
+target and quantize directly the difference.
+By removing the ordering from
+the quantization loop, about 1 MIPS of complexity was saved.
+
+4)
+It was found that the gain smoothing factor in the postfilter gain equalizer
+was set to a lower value than intended. hence this value has been changed 
+from 0.85 to 0.9875.
+
+
